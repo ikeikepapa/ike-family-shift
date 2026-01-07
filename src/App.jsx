@@ -283,8 +283,8 @@ export default function App() {
     { papaMorningRaw: 0, mamaMorningRaw: 0, papaEvening: 0, mamaEvening: 0, penaltyCount: 0 }
   );
 
-  const papaMorningAdjusted = stats.papaMorningRaw - stats.penaltyCount;
-  const mamaMorningAdjusted = stats.mamaMorningRaw + stats.penaltyCount;
+  const papaMorningAdjusted = stats.papaMorningRaw + stats.penaltyCount;
+  const mamaMorningAdjusted = stats.mamaMorningRaw - stats.penaltyCount;
   const papaTotal = papaMorningAdjusted + stats.papaEvening;
   const mamaTotal = mamaMorningAdjusted + stats.mamaEvening;
   const totalDays = getDaysInMonth(year, month);
