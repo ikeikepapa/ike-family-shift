@@ -398,21 +398,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* 保存リマインダー */}
-        {showSaveReminder && (
-          <div className="bg-gradient-to-r from-amber-400 to-orange-500 rounded-2xl px-4 py-3 mb-3 shadow-lg animate-pulse">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-white">
-                <span className="text-xl">💾</span>
-                <span className="text-sm font-bold">変更があります！保存ボタンを押してね</span>
-              </div>
-              <button onClick={saveData}
-                className="bg-white text-orange-600 px-3 py-1 rounded-lg text-sm font-bold shadow hover:bg-orange-50 transition-all">
-                保存する
-              </button>
-            </div>
-          </div>
-        )}
+
 
         {/* ヘッダー */}
         <div className="bg-gray-50 rounded-3xl p-4 mb-3 shadow-sm">
@@ -592,6 +578,24 @@ export default function App() {
           🏠 IKE's FamilyShift Manager
         </div>
       </div>
+
+      {/* フローティング保存リマインダー（画面下部に固定） */}
+      {showSaveReminder && (
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50 w-11/12 max-w-md">
+          <div className="bg-gradient-to-r from-amber-400 to-orange-500 rounded-2xl px-4 py-3 shadow-2xl animate-bounce">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-white">
+                <span className="text-xl">💾</span>
+                <span className="text-sm font-bold">保存を忘れずに！</span>
+              </div>
+              <button onClick={saveData}
+                className="bg-white text-orange-600 px-4 py-2 rounded-xl text-sm font-bold shadow-lg hover:bg-orange-50 transition-all">
+                保存する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
