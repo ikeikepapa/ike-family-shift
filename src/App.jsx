@@ -169,6 +169,7 @@ export default function App() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [calendarEvents, setCalendarEvents] = useState({});
   const [showCalendarPanel, setShowCalendarPanel] = useState(false);
+  const [lastCalendarSync, setLastCalendarSync] = useState(null);
   
   // 今日の日付への参照
   const todayRef = useRef(null);
@@ -267,6 +268,7 @@ export default function App() {
         });
         
         setCalendarEvents(events);
+        setLastCalendarSync(new Date());
       } else if (response.status === 401) {
         handleGoogleLogout();
       }
@@ -276,7 +278,7 @@ export default function App() {
     setIsGoogleLoading(false);
   }, [googleToken, year, month]);
 
-  // Googleカレンダーに育児予定を登録
+  // Googleカレンダーに育児予定を登録（朝・夜両方）
   const syncToGoogleCalendar = async () => {
     if (!googleToken) {
       alert('Googleカレンダーにログインしてください');
@@ -288,10 +290,48 @@ export default function App() {
     let errorCount = 0;
 
     for (const day of shiftData) {
-      // パパが夜当番の日を登録
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day.day).padStart(2, '0')}`;
+      
+      // パパが朝当番の日を登録（6:30-8:00）
+      if (day.morning === 'P') {
+        const morningEvent = {
+          summary: '👶育児',
+          start: {
+            dateTime: `${dateStr}T06:30:00+09:00`,
+            timeZone: 'Asia/Tokyo',
+          },
+          end: {
+            dateTime: `${dateStr}T08:00:00+09:00`,
+            timeZone: 'Asia/Tokyo',
+          },
+        };
+
+        try {
+          const response = await fetch(
+            'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${googleToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(morningEvent),
+            }
+          );
+
+          if (response.ok) {
+            successCount++;
+          } else {
+            errorCount++;
+          }
+        } catch (error) {
+          errorCount++;
+        }
+      }
+
+      // パパが夜当番の日を登録（18:00-21:30）
       if (day.evening === 'P') {
-        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day.day).padStart(2, '0')}`;
-        const event = {
+        const eveningEvent = {
           summary: '👶育児',
           start: {
             dateTime: `${dateStr}T18:00:00+09:00`,
@@ -312,7 +352,7 @@ export default function App() {
                 Authorization: `Bearer ${googleToken}`,
                 'Content-Type': 'application/json',
               },
-              body: JSON.stringify(event),
+              body: JSON.stringify(eveningEvent),
             }
           );
 
@@ -331,10 +371,12 @@ export default function App() {
     alert(`Googleカレンダーに登録完了！\n成功: ${successCount}件\n${errorCount > 0 ? `エラー: ${errorCount}件` : ''}`);
   };
 
-  // カレンダーの予定をシフトに反映
-  const syncFromGoogleCalendar = () => {
+  // カレンダーの予定をシフトに反映（自動実行対応）
+  const syncFromGoogleCalendar = useCallback((silent = false) => {
     if (Object.keys(calendarEvents).length === 0) {
-      alert('先にGoogleカレンダーの予定を読み込んでください');
+      if (!silent) {
+        alert('先にGoogleカレンダーの予定を読み込んでください');
+      }
       return;
     }
 
@@ -357,18 +399,38 @@ export default function App() {
     if (updatedCount > 0) {
       setShiftData(newData);
       setHasChanges(true);
-      alert(`${updatedCount}件の予定をパパメモに反映しました！\n「保存して共有」を押してください。`);
-    } else {
+      if (!silent) {
+        alert(`${updatedCount}件の予定をパパメモに反映しました！\n「保存して共有」を押してください。`);
+      }
+    } else if (!silent) {
       alert('反映する18時以降の予定がありませんでした。');
     }
-  };
+  }, [calendarEvents, shiftData]);
 
-  // トークンがある時にカレンダーを取得
+  // トークンがある時にカレンダーを取得（アプリ起動時）
   useEffect(() => {
     if (googleToken) {
       fetchCalendarEvents();
     }
   }, [googleToken, fetchCalendarEvents]);
+
+  // 定期自動読み込み（5分ごと）
+  useEffect(() => {
+    if (!googleToken) return;
+
+    const interval = setInterval(() => {
+      fetchCalendarEvents();
+    }, 5 * 60 * 1000); // 5分
+
+    return () => clearInterval(interval);
+  }, [googleToken, fetchCalendarEvents]);
+
+  // カレンダーイベント取得後に自動でパパメモに反映
+  useEffect(() => {
+    if (Object.keys(calendarEvents).length > 0 && shiftData.length > 0) {
+      syncFromGoogleCalendar(true); // silent mode
+    }
+  }, [calendarEvents]);
 
   // Supabaseからデータ読み込み
   const loadData = useCallback(async () => {
@@ -563,6 +625,11 @@ export default function App() {
     return lastSynced.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
   };
 
+  const formatCalendarSync = () => {
+    if (!lastCalendarSync) return '';
+    return lastCalendarSync.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  };
+
   return (
     <div className="min-h-screen bg-white p-3">
       <div className="max-w-lg mx-auto">
@@ -597,11 +664,15 @@ export default function App() {
             <div className="flex items-center gap-2 text-white">
               <Calendar className="w-4 h-4" />
               <span className="text-sm font-medium">Googleカレンダー</span>
+              {googleToken && lastCalendarSync && (
+                <span className="text-xs text-white/70">({formatCalendarSync()}更新)</span>
+              )}
             </div>
             {googleToken ? (
               <div className="flex items-center gap-2">
+                <span className="text-xs text-white/80">✅ 接続中</span>
                 <button onClick={() => setShowCalendarPanel(!showCalendarPanel)}
-                  className="text-xs text-white/80 hover:text-white">
+                  className="text-xs text-white/80 hover:text-white bg-white/20 px-2 py-1 rounded">
                   {showCalendarPanel ? '閉じる' : '操作'}
                 </button>
                 <button onClick={handleGoogleLogout}
@@ -621,21 +692,24 @@ export default function App() {
           {/* カレンダー操作パネル */}
           {googleToken && showCalendarPanel && (
             <div className="mt-3 pt-3 border-t border-white/20 space-y-2">
+              <div className="text-xs text-white/80 text-center mb-2">
+                ⏰ 5分ごとに自動で予定を読み込みます
+              </div>
               <button onClick={fetchCalendarEvents} disabled={isGoogleLoading}
                 className="w-full flex items-center justify-center gap-2 bg-white/20 hover:bg-white/30 text-white py-2 rounded-xl text-sm font-medium transition-all">
                 <RefreshCw className={`w-4 h-4 ${isGoogleLoading ? 'animate-spin' : ''}`} />
-                カレンダーから予定を読み込む
+                今すぐカレンダーを読み込む
               </button>
-              <button onClick={syncFromGoogleCalendar} disabled={isGoogleLoading}
+              <button onClick={() => syncFromGoogleCalendar(false)} disabled={isGoogleLoading}
                 className="w-full flex items-center justify-center gap-2 bg-white/20 hover:bg-white/30 text-white py-2 rounded-xl text-sm font-medium transition-all">
                 📥 18時以降の予定 → パパメモに反映
               </button>
               <button onClick={syncToGoogleCalendar} disabled={isGoogleLoading}
                 className="w-full flex items-center justify-center gap-2 bg-white text-green-600 py-2 rounded-xl text-sm font-bold transition-all hover:bg-green-50">
-                📤 パパ夜当番 → カレンダーに登録
+                📤 パパ当番 → カレンダーに登録
               </button>
               <p className="text-[10px] text-white/70 text-center">
-                ※ 夜当番の日を18:00-21:30「👶育児」として登録します
+                ※ 朝当番: 6:30-8:00 / 夜当番: 18:00-21:30「👶育児」
               </p>
             </div>
           )}
