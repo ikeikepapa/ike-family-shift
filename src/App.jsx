@@ -250,6 +250,13 @@ export default function App() {
         
         data.items?.forEach((event) => {
           const startDate = event.start?.dateTime || event.start?.date;
+          const eventTitle = event.summary || '予定';
+          
+          // 「👶育児」は除外（このアプリで登録した予定）
+          if (eventTitle.includes('👶育児') || eventTitle.includes('育児')) {
+            return;
+          }
+          
           if (startDate) {
             const date = new Date(startDate);
             const day = date.getDate();
@@ -259,7 +266,7 @@ export default function App() {
             if (hour >= 18 || !event.start?.dateTime) {
               if (!events[day]) events[day] = [];
               events[day].push({
-                title: event.summary || '予定',
+                title: eventTitle,
                 start: startDate,
                 isEvening: hour >= 18,
               });
