@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Sun, Moon, Save, RotateCcw, ChevronDown, ChevronUp, RefreshCw, Users } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Sun, Moon, Save, RotateCcw, ChevronDown, ChevronUp, RefreshCw, Users, Calendar, LogIn, LogOut } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
 const DAYS_OF_WEEK = ['日', '月', '火', '水', '木', '金', '土'];
+
+// Google OAuth設定
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly';
 
 // 日本の祝日データ（2024-2026年）
 const HOLIDAYS = {
@@ -160,6 +164,12 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showSaveReminder, setShowSaveReminder] = useState(false);
   
+  // Googleカレンダー関連
+  const [googleToken, setGoogleToken] = useState(null);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [calendarEvents, setCalendarEvents] = useState({});
+  const [showCalendarPanel, setShowCalendarPanel] = useState(false);
+  
   // 今日の日付への参照
   const todayRef = useRef(null);
   const hasScrolledRef = useRef(false);
@@ -176,6 +186,189 @@ export default function App() {
       }, 300);
     }
   }, [year, month, today]);
+
+  // Google OAuth ログイン
+  const handleGoogleLogin = () => {
+    const redirectUri = window.location.origin;
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${encodeURIComponent(GOOGLE_SCOPES)}&prompt=consent`;
+    window.location.href = authUrl;
+  };
+
+  // Google OAuth ログアウト
+  const handleGoogleLogout = () => {
+    setGoogleToken(null);
+    setCalendarEvents({});
+    localStorage.removeItem('google_access_token');
+    localStorage.removeItem('google_token_expiry');
+  };
+
+  // URLからトークンを取得（OAuth リダイレクト後）
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.includes('access_token')) {
+      const params = new URLSearchParams(hash.substring(1));
+      const token = params.get('access_token');
+      const expiresIn = params.get('expires_in');
+      if (token) {
+        setGoogleToken(token);
+        localStorage.setItem('google_access_token', token);
+        localStorage.setItem('google_token_expiry', Date.now() + parseInt(expiresIn) * 1000);
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    } else {
+      // ローカルストレージからトークンを復元
+      const savedToken = localStorage.getItem('google_access_token');
+      const expiry = localStorage.getItem('google_token_expiry');
+      if (savedToken && expiry && Date.now() < parseInt(expiry)) {
+        setGoogleToken(savedToken);
+      }
+    }
+  }, []);
+
+  // Googleカレンダーから予定を取得
+  const fetchCalendarEvents = useCallback(async () => {
+    if (!googleToken) return;
+    
+    setIsGoogleLoading(true);
+    try {
+      const timeMin = new Date(year, month, 1).toISOString();
+      const timeMax = new Date(year, month + 1, 0, 23, 59, 59).toISOString();
+      
+      const response = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
+        {
+          headers: {
+            Authorization: `Bearer ${googleToken}`,
+          },
+        }
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        const events = {};
+        
+        data.items?.forEach((event) => {
+          const startDate = event.start?.dateTime || event.start?.date;
+          if (startDate) {
+            const date = new Date(startDate);
+            const day = date.getDate();
+            const hour = date.getHours();
+            
+            // 18時以降の予定をチェック
+            if (hour >= 18 || !event.start?.dateTime) {
+              if (!events[day]) events[day] = [];
+              events[day].push({
+                title: event.summary || '予定',
+                start: startDate,
+                isEvening: hour >= 18,
+              });
+            }
+          }
+        });
+        
+        setCalendarEvents(events);
+      } else if (response.status === 401) {
+        handleGoogleLogout();
+      }
+    } catch (error) {
+      console.error('Calendar fetch error:', error);
+    }
+    setIsGoogleLoading(false);
+  }, [googleToken, year, month]);
+
+  // Googleカレンダーに育児予定を登録
+  const syncToGoogleCalendar = async () => {
+    if (!googleToken) {
+      alert('Googleカレンダーにログインしてください');
+      return;
+    }
+
+    setIsGoogleLoading(true);
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const day of shiftData) {
+      // パパが夜当番の日を登録
+      if (day.evening === 'P') {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day.day).padStart(2, '0')}`;
+        const event = {
+          summary: '👶育児',
+          start: {
+            dateTime: `${dateStr}T18:00:00+09:00`,
+            timeZone: 'Asia/Tokyo',
+          },
+          end: {
+            dateTime: `${dateStr}T21:30:00+09:00`,
+            timeZone: 'Asia/Tokyo',
+          },
+        };
+
+        try {
+          const response = await fetch(
+            'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${googleToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(event),
+            }
+          );
+
+          if (response.ok) {
+            successCount++;
+          } else {
+            errorCount++;
+          }
+        } catch (error) {
+          errorCount++;
+        }
+      }
+    }
+
+    setIsGoogleLoading(false);
+    alert(`Googleカレンダーに登録完了！\n成功: ${successCount}件\n${errorCount > 0 ? `エラー: ${errorCount}件` : ''}`);
+  };
+
+  // カレンダーの予定をシフトに反映
+  const syncFromGoogleCalendar = () => {
+    if (Object.keys(calendarEvents).length === 0) {
+      alert('先にGoogleカレンダーの予定を読み込んでください');
+      return;
+    }
+
+    const newData = [...shiftData];
+    let updatedCount = 0;
+
+    Object.entries(calendarEvents).forEach(([day, events]) => {
+      const dayIndex = parseInt(day) - 1;
+      if (dayIndex >= 0 && dayIndex < newData.length) {
+        const hasEveningEvent = events.some(e => e.isEvening);
+        if (hasEveningEvent && !newData[dayIndex].memoPapa.includes('予定あり')) {
+          newData[dayIndex].memoPapa = newData[dayIndex].memoPapa 
+            ? `${newData[dayIndex].memoPapa}\n📅予定あり` 
+            : '📅予定あり';
+          updatedCount++;
+        }
+      }
+    });
+
+    if (updatedCount > 0) {
+      setShiftData(newData);
+      setHasChanges(true);
+      alert(`${updatedCount}件の予定をパパメモに反映しました！\n「保存して共有」を押してください。`);
+    } else {
+      alert('反映する18時以降の予定がありませんでした。');
+    }
+  };
+
+  // トークンがある時にカレンダーを取得
+  useEffect(() => {
+    if (googleToken) {
+      fetchCalendarEvents();
+    }
+  }, [googleToken, fetchCalendarEvents]);
 
   // Supabaseからデータ読み込み
   const loadData = useCallback(async () => {
@@ -398,7 +591,55 @@ export default function App() {
           </div>
         </div>
 
-
+        {/* Googleカレンダー連携パネル */}
+        <div className="bg-gradient-to-r from-green-500 to-teal-500 rounded-2xl px-4 py-2 mb-3 shadow-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-white">
+              <Calendar className="w-4 h-4" />
+              <span className="text-sm font-medium">Googleカレンダー</span>
+            </div>
+            {googleToken ? (
+              <div className="flex items-center gap-2">
+                <button onClick={() => setShowCalendarPanel(!showCalendarPanel)}
+                  className="text-xs text-white/80 hover:text-white">
+                  {showCalendarPanel ? '閉じる' : '操作'}
+                </button>
+                <button onClick={handleGoogleLogout}
+                  className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center hover:bg-white/30 transition-all">
+                  <LogOut className="w-4 h-4 text-white" />
+                </button>
+              </div>
+            ) : (
+              <button onClick={handleGoogleLogin}
+                className="flex items-center gap-1 bg-white text-green-600 px-3 py-1 rounded-lg text-sm font-bold hover:bg-green-50 transition-all">
+                <LogIn className="w-4 h-4" />
+                ログイン
+              </button>
+            )}
+          </div>
+          
+          {/* カレンダー操作パネル */}
+          {googleToken && showCalendarPanel && (
+            <div className="mt-3 pt-3 border-t border-white/20 space-y-2">
+              <button onClick={fetchCalendarEvents} disabled={isGoogleLoading}
+                className="w-full flex items-center justify-center gap-2 bg-white/20 hover:bg-white/30 text-white py-2 rounded-xl text-sm font-medium transition-all">
+                <RefreshCw className={`w-4 h-4 ${isGoogleLoading ? 'animate-spin' : ''}`} />
+                カレンダーから予定を読み込む
+              </button>
+              <button onClick={syncFromGoogleCalendar} disabled={isGoogleLoading}
+                className="w-full flex items-center justify-center gap-2 bg-white/20 hover:bg-white/30 text-white py-2 rounded-xl text-sm font-medium transition-all">
+                📥 18時以降の予定 → パパメモに反映
+              </button>
+              <button onClick={syncToGoogleCalendar} disabled={isGoogleLoading}
+                className="w-full flex items-center justify-center gap-2 bg-white text-green-600 py-2 rounded-xl text-sm font-bold transition-all hover:bg-green-50">
+                📤 パパ夜当番 → カレンダーに登録
+              </button>
+              <p className="text-[10px] text-white/70 text-center">
+                ※ 夜当番の日を18:00-21:30「👶育児」として登録します
+              </p>
+            </div>
+          )}
+        </div>
 
         {/* ヘッダー */}
         <div className="bg-gray-50 rounded-3xl p-4 mb-3 shadow-sm">
@@ -495,6 +736,7 @@ export default function App() {
             const isTodayDate = isToday(day.day);
             const isExpanded = expandedDay === index;
             const hasMemo = day.memoPapa || day.memoMama || day.memoKensei || day.memoKento;
+            const hasCalendarEvent = calendarEvents[day.day]?.length > 0;
 
             return (
               <div key={day.day}
@@ -507,7 +749,7 @@ export default function App() {
                     : isHoliday || isSunday ? 'bg-gradient-to-r from-white to-rose-50 shadow-sm'
                     : isSaturday ? 'bg-gradient-to-r from-white to-blue-50 shadow-sm'
                     : 'bg-gray-50 shadow-sm'
-                } ${hasMemo && !isTodayDate ? 'ring-2 ring-amber-400 ring-offset-1' : ''}`}>
+                } ${hasMemo && !isTodayDate ? 'ring-2 ring-amber-400 ring-offset-1' : ''} ${hasCalendarEvent && !isTodayDate ? 'ring-2 ring-green-400 ring-offset-1' : ''}`}>
                   <div className="p-2.5">
                     <div className="flex items-center gap-2">
                       <div className="flex flex-col items-center w-14 flex-shrink-0">
@@ -525,6 +767,11 @@ export default function App() {
                         {isHoliday && (
                           <span className="text-[8px] bg-gradient-to-r from-orange-400 to-rose-400 text-white px-1.5 py-0.5 rounded-full font-bold mt-0.5 whitespace-nowrap">
                             🎌{holiday.length > 4 ? holiday.slice(0, 4) : holiday}
+                          </span>
+                        )}
+                        {hasCalendarEvent && (
+                          <span className="text-[8px] bg-gradient-to-r from-green-400 to-teal-400 text-white px-1.5 py-0.5 rounded-full font-bold mt-0.5">
+                            📅予定
                           </span>
                         )}
                       </div>
