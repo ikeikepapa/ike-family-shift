@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Sun, Moon, Save, RotateCcw, ChevronDown, ChevronUp, RefreshCw, Users } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -158,10 +158,24 @@ export default function App() {
   const [expandedDay, setExpandedDay] = useState(null);
   const [lastSynced, setLastSynced] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showSaveReminder, setShowSaveReminder] = useState(false);
+  
+  // 今日の日付への参照
+  const todayRef = useRef(null);
+  const hasScrolledRef = useRef(false);
 
   const isToday = (day) => {
     return year === today.getFullYear() && month === today.getMonth() && day === today.getDate();
   };
+
+  // 今日の日付へスクロール
+  const scrollToToday = useCallback(() => {
+    if (todayRef.current && year === today.getFullYear() && month === today.getMonth()) {
+      setTimeout(() => {
+        todayRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 300);
+    }
+  }, [year, month, today]);
 
   // Supabaseからデータ読み込み
   const loadData = useCallback(async () => {
@@ -195,7 +209,16 @@ export default function App() {
   useEffect(() => {
     loadData();
     setExpandedDay(null);
+    hasScrolledRef.current = false;
   }, [loadData]);
+
+  // データ読み込み後に今日の日付へスクロール
+  useEffect(() => {
+    if (shiftData.length > 0 && !hasScrolledRef.current) {
+      scrollToToday();
+      hasScrolledRef.current = true;
+    }
+  }, [shiftData, scrollToToday]);
 
   // 自動同期（30秒ごと）
   useEffect(() => {
@@ -207,9 +230,22 @@ export default function App() {
     return () => clearInterval(interval);
   }, [loadData, hasChanges]);
 
+  // 保存リマインダー表示（変更後5秒経過で表示）
+  useEffect(() => {
+    if (hasChanges) {
+      const timer = setTimeout(() => {
+        setShowSaveReminder(true);
+      }, 5000);
+      return () => clearTimeout(timer);
+    } else {
+      setShowSaveReminder(false);
+    }
+  }, [hasChanges]);
+
   // Supabaseにデータ保存
   const saveData = async () => {
     setIsSyncing(true);
+    setShowSaveReminder(false);
     try {
       const yearMonth = getStorageKey(year, month);
       const { error } = await supabase
@@ -250,11 +286,13 @@ export default function App() {
   };
 
   const prevMonth = () => {
+    hasScrolledRef.current = false;
     if (month === 0) { setYear(year - 1); setMonth(11); }
     else { setMonth(month - 1); }
   };
 
   const nextMonth = () => {
+    hasScrolledRef.current = false;
     if (month === 11) { setYear(year + 1); setMonth(0); }
     else { setMonth(month + 1); }
   };
@@ -360,6 +398,22 @@ export default function App() {
           </div>
         </div>
 
+        {/* 保存リマインダー */}
+        {showSaveReminder && (
+          <div className="bg-gradient-to-r from-amber-400 to-orange-500 rounded-2xl px-4 py-3 mb-3 shadow-lg animate-pulse">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-white">
+                <span className="text-xl">💾</span>
+                <span className="text-sm font-bold">変更があります！保存ボタンを押してね</span>
+              </div>
+              <button onClick={saveData}
+                className="bg-white text-orange-600 px-3 py-1 rounded-lg text-sm font-bold shadow hover:bg-orange-50 transition-all">
+                保存する
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* ヘッダー */}
         <div className="bg-gray-50 rounded-3xl p-4 mb-3 shadow-sm">
           <div className="flex items-center justify-between mb-3">
@@ -458,6 +512,7 @@ export default function App() {
 
             return (
               <div key={day.day}
+                ref={isTodayDate ? todayRef : null}
                 className={`rounded-3xl overflow-hidden transition-all ${
                   isTodayDate ? 'bg-gradient-to-r from-blue-500 via-purple-500 to-rose-500 p-0.5 shadow-lg' : ''
                 }`}>
